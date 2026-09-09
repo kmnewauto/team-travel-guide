@@ -12,7 +12,7 @@
   var LS_WX = 'tgt.wx.v1';
   var LS_AI = 'tgt.ai.v1';
 
-  var state = { plan: null, route: 'home', admin: false };
+  var state = { plan: null, route: 'home', admin: false, sharedView: false };
   var wz = null;                                  // 创建向导的临时状态
 
   /* ================= 工具 ================= */
@@ -527,7 +527,13 @@
   }
 
   /* ================= 路由 ================= */
+  function updateTopActions() {
+    // 随团人员视角（B-link）：隐藏「分享 / 设定行程」入口
+    var el = document.querySelector('.topbar-right');
+    if (el) el.style.display = state.sharedView ? 'none' : '';
+  }
   function render() {
+    updateTopActions();
     ['home', 'today', 'trip'].forEach(function (r) { $('#view-' + r).hidden = r !== state.route; });
     $$('.tab').forEach(function (t) { t.classList.toggle('active', t.dataset.route === state.route); });
     if (state.route === 'home') renderHome();
@@ -1242,6 +1248,7 @@
       + '<button class="btn btn-ghost" id="swNo">保留我自己的行程</button>', function (root) {
         $('#swYes', root).onclick = function () {
           state.plan = shared; savePlan(shared);
+          state.sharedView = true;
           $('#topbarSub').textContent = shared.lite ? '随团人员视角 · 精简版' : '随团人员视角';
           closeSheet(); render(); toast('已切换到分享的行程');
         };
@@ -1254,6 +1261,7 @@
     try { localStorage.removeItem('tgt.plan.v1'); localStorage.removeItem('tgt.plan.v2'); } catch (e) { }
     readSharedPlan().then(function (shared) {
       var local = loadPlan();
+      state.sharedView = false;
       if (shared && shared.days && shared.days.length) {
         if (local && local.days && local.days.length) {
           // 本机已有计划（例如团长自己点了分享链接）：先保留，再询问是否切换
@@ -1261,6 +1269,7 @@
           setTimeout(function () { askSwitchPlan(shared, local); }, 260);
         } else {
           state.plan = shared; savePlan(shared);
+          state.sharedView = true;
           $('#topbarSub').textContent = shared.lite ? '随团人员视角 · 精简版' : '随团人员视角';
         }
       } else if (local && local.days && local.days.length) {
