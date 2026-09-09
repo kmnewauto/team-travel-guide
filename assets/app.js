@@ -1230,37 +1230,218 @@
     } catch (e) { return false; }
   }
 
+  /* ================= 行程分享卡片 ================= */
+  function cardRound(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+  /* 长文本按可用宽度断行，最多 maxLines 行，超出以 … 收尾 */
+  function cardWrap(ctx, text, maxW, maxLines) {
+    var t = String(text == null ? '' : text), lines = [], cur = '';
+    for (var i = 0; i < t.length; i++) {
+      var ch = t.charAt(i);
+      if (ctx.measureText(cur + ch).width > maxW) {
+        lines.push(cur); cur = ch;
+        if (lines.length === maxLines) {
+          var last = lines[maxLines - 1];
+          lines[maxLines - 1] = last.slice(0, Math.max(1, last.length - 2)) + '…';
+          return lines;
+        }
+      } else cur += ch;
+    }
+    if (cur) lines.push(cur);
+    if (lines.length > maxLines) {
+      var L = lines.slice(0, maxLines);
+      L[maxLines - 1] = (L[maxLines - 1] || '') + '…';
+      return L;
+    }
+    return lines;
+  }
+  /* 绘制 720×1100 竖版行程分享卡片（含本地二维码），返回 PNG dataURL */
+  function drawShareCard(plan, url, qrImg) {
+    var W = 720, H = 1100, pad = 46;
+    var cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    var ctx = cv.getContext('2d');
+    var o = plan.organizer || {}, title = (plan.title || '团队旅行').trim();
+    var days = plan.days || [], cities = [];
+    days.forEach(function (d) { if (d.city && cities[cities.length - 1] !== d.city) cities.push(d.city); });
+    var f = '"PingFang SC","Microsoft YaHei","Helvetica Neue",sans-serif';
+    /* 顶部渐变 banner */
+    var g = ctx.createLinearGradient(0, 0, 0, 272);
+    g.addColorStop(0, '#12808f'); g.addColorStop(1, '#0a4a5f');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, 272);
+    ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255,255,255,.85)';
+    ctx.font = '600 22px ' + f;
+    ctx.fillText('TEAM TRIP · 团队行程攻略', pad, 84);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 46px ' + f;
+    cardWrap(ctx, title, W - pad * 2, 2).forEach(function (ln, i) { ctx.fillText(ln, pad, 150 + i * 56); });
+    /* 出行统计条 */
+    ctx.fillStyle = '#0c5663';
+    ctx.font = '600 32px ' + f;
+    ctx.textAlign = 'center';
+    ctx.fillText(fmtMD(plan.startDate) + ' — ' + fmtMD(plan.endDate) + ' · 共 ' + days.length + ' 天 · ' + cities.length + ' 城', W / 2, 348);
+    /* 路线 chips（最多两行，超出省略） */
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#9fb0b5';
+    ctx.font = '500 25px ' + f;
+    ctx.fillText('行程路线', pad, 404);
+    ctx.font = '500 27px ' + f;
+    var x = pad, rowY = 452, usedRows = 1, rest = 0;
+    for (var i = 0; i < cities.length; i++) {
+      var cw = ctx.measureText(cities[i]).width + 56;
+      if (x + cw > W - pad && x > pad) { x = pad; rowY += 58; usedRows++; }
+      if (usedRows > 2) { rest = cities.length - i; break; }
+      ctx.fillStyle = '#e3f0f3';
+      cardRound(ctx, x, rowY - 42, cw, 50, 25);
+      ctx.fill();
+      ctx.fillStyle = '#0c5663';
+      ctx.fillText(cities[i], x + 26, rowY - 10);
+      x += cw + 12;
+    }
+    if (rest > 0) {
+      ctx.fillStyle = '#0c5663';
+      ctx.font = '500 27px ' + f;
+      ctx.fillText('…… 等 ' + rest + ' 城', pad, rowY - 10);
+    }
+    /* 组团人 */
+    ctx.font = '600 28px ' + f;
+    ctx.fillText('👤 组团人　' + (o.name || '—') + (o.phone ? '　' + o.phone : ''), pad, 656);
+    /* 分隔线 */
+    ctx.strokeStyle = '#e3eef0'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(pad, 682); ctx.lineTo(W - pad, 682); ctx.stroke();
+    /* 底部二维码区 */
+    var g2 = ctx.createLinearGradient(0, 700, 0, H);
+    g2.addColorStop(0, '#eef8fa'); g2.addColorStop(1, '#dceef1');
+    ctx.fillStyle = g2; ctx.fillRect(0, 700, W, H - 700);
+    ctx.fillStyle = '#ffffff';
+    cardRound(ctx, 170, 702, 380, 352, 26);
+    ctx.fill();
+    if (qrImg) {
+      ctx.drawImage(qrImg, 210, 728, 300, 300);
+    } else {
+      ctx.fillStyle = '#0c5663';
+      ctx.font = '500 22px ' + f;
+      cardWrap(ctx, url, 300, 9).forEach(function (ln, i2) { ctx.fillText(ln, 210, 790 + i2 * 34); });
+    }
+    ctx.fillStyle = '#0a4a5f';
+    ctx.font = '600 26px ' + f;
+    ctx.textAlign = 'center';
+    ctx.fillText('微信扫一扫 · 或长按识别 · 查看完整行程攻略', W / 2, 1086);
+    return cv.toDataURL('image/png');
+  }
+  function makeShareCard(plan, url) {
+    return new Promise(function (resolve, reject) {
+      var qr = qrDataURL(url);
+      if (!qr) {
+        try { resolve(drawShareCard(plan, url, null)); } catch (e) { reject(e); }
+        return;
+      }
+      var img = new Image();
+      img.onload = function () { try { resolve(drawShareCard(plan, url, img)); } catch (e) { reject(e); } };
+      img.onerror = function () { try { resolve(drawShareCard(plan, url, null)); } catch (e) { reject(e); } };
+      img.src = qr;
+    });
+  }
+  function dataURLToBlob(durl) {
+    var parts = String(durl).split(','), m = /^data:([^;]+);base64/i.exec(parts[0] || '');
+    if (!m || parts.length < 2) return new Blob([durl], { type: 'text/plain' });
+    var bin = atob(parts[1]), u8 = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return new Blob([u8], { type: m[1] });
+  }
+  function downloadDataURL(durl, name) {
+    try {
+      var a = document.createElement('a');
+      a.href = durl; a.download = name; a.rel = 'noopener';
+      document.body.appendChild(a); a.click();
+      setTimeout(function () { document.body.removeChild(a); }, 1000);
+      return true;
+    } catch (e) { return false; }
+  }
+  /* 保存/分享卡片图：手机上优先调起系统分享，其次下载，最后新窗口兜底 */
+  function saveCardImage(durl, name) {
+    try {
+      var file = new File([dataURLToBlob(durl)], name, { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        return navigator.share({
+          files: [file],
+          title: (state.plan.title || '行程') + '分享卡片'
+        }).then(function () { return 'shared'; }, function (err) {
+          if (err && err.name === 'AbortError') return 'cancel';
+          return downloadDataURL(durl, name) ? 'downloaded' : 'open';
+        });
+      }
+    } catch (e) { }
+    return Promise.resolve(downloadDataURL(durl, name) ? 'downloaded' : 'open');
+  }
+
   function openPush() {
     if (!state.plan || !state.plan.days.length) { toast('请先创建行程计划'); return; }
     var base = shareBase();
     if (!base) { openShareBase(); return; }
-    openSheet('分享给团员', '<div class="empty"><div class="e-emoji">⏳</div><div class="e-t">正在生成 B-link…</div></div>');
+    openSheet('分享给团员', '<div class="empty"><div class="e-emoji">⏳</div><div class="e-t">正在生成分享卡片…</div></div>');
     shareURL(state.plan, true).then(function (liteURL) {
-      if (!liteURL) return shareURL(state.plan, false);
-      return liteURL;
+      return liteURL || shareURL(state.plan, false);
     }).then(function (liteURL) {
+      if (!liteURL) { toast('生成分享链接失败，请重试'); closeSheet(); return; }
       var local = isLocalBase(base);
       var warn = local
-        ? '<div class="notice" style="margin-bottom:14px">⚠️ 当前地址 ' + esc(base) + ' 是本机/局域网地址，团员在外面打不开。<br>请改用公网版：https://kmnewauto.github.io/team-travel-guide/（登录后可重新生成）</div>' : '';
+        ? '<div class="notice" style="margin-bottom:12px">⚠️ 当前地址 ' + esc(base) + ' 是本机/局域网地址，团员在外面打不开。<br>请改用公网版：https://kmnewauto.github.io/team-travel-guide/（登录后可重新生成）</div>' : '';
       var html = warn
-        + '<div class="hint" style="text-align:center;margin:4px 0 14px">把链接发给团员，点开即看<b>只读行程攻略</b>，无需安装任何应用</div>'
-        + '<textarea class="share-link" id="bLink" readonly>' + esc(liteURL) + '</textarea>'
-        + '<div class="btn-row" style="margin-top:10px">'
-        + '<button class="btn btn-primary" id="btnCopyB" style="flex:1">复制 B-link</button></div>'
-        + '<div class="hint" style="text-align:center;margin-top:10px">行程修改后链接会随之更新，请重新复制再发送</div>';
-      openSheet('分享给团员（B-link）', html, function (root) {
+        + '<div class="hint" style="text-align:center;margin:2px 0 12px">把下面这张<b>行程卡片</b>发到群里：团员<b>长按识别</b>或微信<b>扫一扫</b>，点开即看完整攻略</div>'
+        + '<div id="cardZone"><div class="empty" style="padding:22px 0"><div class="e-emoji">🖼️</div><div class="e-s" id="cardBusy">正在绘制分享卡片…</div></div></div>'
+        + '<div class="btn-row" style="margin-top:12px">'
+        + '<button class="btn btn-primary" id="btnSaveCard" disabled style="flex:1.35">📤 保存 / 分享卡片</button>'
+        + '<button class="btn btn-ghost" id="btnCopyB" style="flex:1">🔗 复制链接</button></div>'
+        + '<div class="hint" style="text-align:center;margin-top:10px" id="cardTip">卡片生成中，请稍候…</div>';
+      openSheet('分享给团员', html, function (root) {
         function doCopy() {
-          var ta = $('#bLink', root); ta.select(); ta.setSelectionRange(0, 99999);
-          var ok = false;
-          try { ok = document.execCommand('copy'); } catch (e) { }
-          if (!ok && navigator.clipboard) {
-            navigator.clipboard.writeText(ta.value).then(function () { toast('B-link 已复制，粘贴到微信群即可'); }, function () { toast('复制失败，请长按链接手动复制'); });
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(liteURL).then(function () { toast('链接已复制，可粘贴发送'); }, function () { toast('复制失败，请长按分享文案'); });
             return;
           }
-          toast(ok ? 'B-link 已复制，粘贴到微信群即可' : '复制失败，请长按链接手动复制');
+          var ok = false;
+          try {
+            var ta = document.createElement('textarea');
+            ta.value = liteURL; ta.style.position = 'fixed'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, 99999);
+            ok = document.execCommand('copy'); document.body.removeChild(ta);
+          } catch (e) { }
+          toast(ok ? '链接已复制，可粘贴发送' : '复制失败，请长按文本复制');
         }
         $('#btnCopyB', root).onclick = doCopy;
-        $('#bLink', root).addEventListener('click', function () { this.select(); this.setSelectionRange(0, 99999); });
+        var zone = $('#cardZone', root), saveBtn = $('#btnSaveCard', root), tip = $('#cardTip', root);
+        makeShareCard(state.plan, liteURL).then(function (durl) {
+          zone.innerHTML = '<img id="cardPrev" alt="行程分享卡片" style="width:100%;border-radius:16px;box-shadow:0 8px 22px rgba(20,60,70,.18)">';
+          var im = $('#cardPrev', root);
+          im.src = durl;
+          im.onclick = function () { try { window.open(durl, '_blank'); } catch (e) { } };
+          saveBtn.disabled = false;
+          tip.innerHTML = '手机上会自动弹出系统分享面板，选「微信」即可发送；<br>也可<b>长按上图保存</b>后发到群里';
+          saveBtn.onclick = function () {
+            saveBtn.disabled = true; saveBtn.textContent = '处理中…';
+            var name = (state.plan.title || '行程').replace(/[\\/:*?"<>|]/g, '') + '-行程卡片.png';
+            saveCardImage(durl, name).then(function (r) {
+              saveBtn.disabled = false; saveBtn.textContent = '📤 保存 / 分享卡片';
+              if (r === 'shared') toast('已调起分享，选「微信」发送给团员即可');
+              else if (r === 'cancel') toast('已取消分享');
+              else if (r === 'downloaded') toast('已下载图片，发送到微信群即可');
+              else { toast('下载可能被拦截：请长按上方图片保存，或点图片在新窗口另存'); try { window.open(durl, '_blank'); } catch (e) { } }
+            });
+          };
+        }, function () {
+          zone.innerHTML = '<div class="notice" style="margin:4px 0">当前浏览器不支持生成图片卡片，请改用「🔗 复制链接」发送</div>';
+          tip.textContent = '';
+          saveBtn.style.display = 'none';
+        });
       });
     });
   }
