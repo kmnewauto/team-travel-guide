@@ -11,6 +11,10 @@
   var LS_UNLOCK = 'tgt.unlocked.v3';
   var LS_WX = 'tgt.wx.v1';
   var LS_AI = 'tgt.ai.v1';
+  var LS_WIKI = 'tgt.wiki.v1';     // 简介缓存（避免重复抓取）
+  var GEN_CONC = 2;                // 生成指南的并行城市数
+  var T_NET = 5000;                // 通用网络请求超时（毫秒）
+  var T_AI = 12000;                // AI 请求超时（毫秒）
 
   var state = { plan: null, route: 'home', admin: false, sharedView: false };
   var wz = null;                                  // 创建向导的临时状态
@@ -187,14 +191,39 @@
   /* ================= 自动资料获取 ================= */
   function netOK() { return typeof fetch === 'function' && navigator.onLine !== false; }
 
+  /* 带超时的 fetch：超时按失败处理（网络被墙/慢时不再无限挂起） */
+  function fetchT(url, opts, ms) {
+    if (typeof AbortController === 'undefined') return fetch(url, opts);
+    var c = new AbortController();
+    var timer = setTimeout(function () { try { c.abort(); } catch (e) { } }, ms || T_NET);
+    var o = Object.assign({}, opts || {}, { signal: c.signal });
+    return fetch(url, o).then(function (r) {
+      clearTimeout(timer); return r;
+    }, function (e) {
+      clearTimeout(timer); throw e;
+    });
+  }
+
+  /* 简介缓存：按 词条 缓存拉取结果 */
+  function readWikiCache(k) {
+    try { var all = JSON.parse(localStorage.getItem(LS_WIKI) || '{}'); return all[k] || null; } catch (e) { return null; }
+  }
+  function writeWikiCache(k, v) {
+    try {
+      var all = JSON.parse(localStorage.getItem(LS_WIKI) || '{}');
+      if (Object.keys(all).length > 500) all = {};          // 防膨胀
+      all[k] = v; localStorage.setItem(LS_WIKI, JSON.stringify(all));
+    } catch (e) { }
+  }
+
   function geocode(city) {
     var local = DEMO.lookupCity(city);          // 内置库优先（中文地名更准）
     if (local) {
       return Promise.resolve({ lat: local.lat, lon: local.lon, country: local.c, code: '' });
     }
     if (!city || !netOK()) return Promise.resolve(null);
-    return fetch('https://geocoding-api.open-meteo.com/v1/search?name=' + encodeURIComponent(city)
-      + '&count=1&language=zh&format=json')
+    return fetchT('https://geocoding-api.open-meteo.com/v1/search?name=' + encodeURIComponent(city)
+      + '&count=1&language=zh&format=json', null, T_NET)
       .then(function (r) { return r.json(); })
       .then(function (j) {
         var r0 = j.results && j.results[0];
@@ -207,15 +236,23 @@
       }).catch(function () { return null; });
   }
 
+  var wikiDead = false;                 // 本会话内维基百科不可达（被墙/超时）→ 不再逐城空等
+
   function wikiSummary(title) {
-    if (!title || !netOK()) return Promise.resolve('');
+    if (!title || !netOK() || wikiDead) return Promise.resolve('');
+    var hit = readWikiCache(title);
+    if (hit != null) return Promise.resolve(hit);
     var url = 'https://zh.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1'
       + '&format=json&origin=*&redirects=1&titles=' + encodeURIComponent(title);
-    return fetch(url).then(function (r) { return r.json(); }).then(function (j) {
+    return fetchT(url, null, T_NET).then(function (r) { return r.json(); }).then(function (j) {
       var pages = (j.query && j.query.pages) || {};
-      for (var k in pages) { var p = pages[k]; if (p && p.extract) return clip(p.extract, 150); }
+      for (var k in pages) { var p = pages[k]; if (p && p.extract) { var t = clip(p.extract, 150); writeWikiCache(title, t); return t; } }
+      writeWikiCache(title, ''); return '';
+    }).catch(function (e) {
+      /* 连不上（如大陆访问维基被墙）→ 本会话剩余城市直接跳过，避免每城空等 5s */
+      wikiDead = true;
       return '';
-    }).catch(function () { return ''; });
+    });
   }
   function clip(t, n) {
     t = String(t).replace(/\s+/g, ' ').trim();
@@ -289,11 +326,11 @@
       + '城市：' + day.city + '（' + (day.country || '') + '），日期：' + day.date + '\n'
       + '主要景点：' + ((day.spots || []).map(function (s) { return s.name; }).join('、') || '无');
     var base = c.baseUrl || 'https://api.openai.com/v1';
-    return fetch(base.replace(/\/+$/, '') + '/chat/completions', {
+    return fetchT(base.replace(/\/+$/, '') + '/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + c.key },
       body: JSON.stringify({ model: c.model, messages: [{ role: 'user', content: prompt }], temperature: 0.7 })
-    }).then(function (r) { return r.json(); }).then(function (j) {
+    }, T_AI).then(function (r) { return r.json(); }).then(function (j) {
       var t = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content || '';
       var m = /\{[\s\S]*\}/.exec(t);
       if (!m) return null;
@@ -315,31 +352,35 @@
 
   function autoFillDay(day, onStep) {
     var intro = '';
-    return Promise.resolve()
-      .then(function () {
-        onStep && onStep('定位 ' + day.city + ' …');
-        return (day.lat == null) ? geocode(day.city) : null;
-      })
-      .then(function (g) {
+    function note(m) { onStep && onStep(m); }
+    var jobs = [];
+
+    /* 1) 定位坐标：仅当未知时才请求（内置库优先，未收录走网络，5s 超时降级） */
+    if (day.lat == null) {
+      note('定位 ' + day.city + ' …');
+      jobs.push(geocode(day.city).then(function (g) {
         if (g) { day.lat = g.lat; day.lon = g.lon; day.country = g.country || day.country; }
-        onStep && onStep('查询 ' + day.city + ' 资料…');
-        return wikiSummary(day.city);
-      })
-      .then(function (ci) {
-        intro = ci; day.cityIntro = ci;
-        var s = day.spots || [];
-        return Promise.all([s[0] ? wikiSummary(s[0].name) : '', s[1] ? wikiSummary(s[1].name) : '']);
-      })
-      .then(function (ints) {
-        (day.spots || []).forEach(function (s, i) {
-          if (!s.emoji || s.emoji === '📍') s.emoji = emojiFor(s.name);
-          s.desc = ints[i] || (day.city + ' · ' + s.name + '：本地重点游览项目，建议预留 2 小时以上');
-          if (!s.tip) s.tip = '出发前确认开放时间与预约要求，避开 10:00–15:00 高峰';
-        });
-        onStep && onStep('生成 ' + day.city + ' 美食与避坑…');
-        return aiGuide(day);
-      })
-      .then(function (ai) {
+      }));
+    }
+
+    /* 2) 城市简介 + 3) 各景点简介：彼此无依赖，全部并行（缓存命中则瞬时） */
+    note('查询 ' + day.city + ' 资料…');
+    jobs.push(wikiSummary(day.city).then(function (ci) { intro = ci; day.cityIntro = ci; }));
+    (day.spots || []).forEach(function (s) {
+      if (s.name && (!s.desc || s.desc.indexOf('本地重点游览项目') >= 0)) {
+        jobs.push(wikiSummary(s.name).then(function (t) { if (t) s.desc = t; }));
+      }
+    });
+
+    /* 4) 并行资料到位后，统一生成 emoji / 兜底简介 / tip / 美食购物避坑 */
+    return Promise.all(jobs).then(function () {
+      (day.spots || []).forEach(function (s) {
+        if (!s.emoji || s.emoji === '📍') s.emoji = emojiFor(s.name);
+        if (!s.desc) s.desc = day.city + ' · ' + s.name + '：本地重点游览项目，建议预留 2 小时以上';
+        if (!s.tip) s.tip = '出发前确认开放时间与预约要求，避开 10:00–15:00 高峰';
+      });
+      note('生成 ' + day.city + ' 美食与避坑…');
+      return aiGuide(day).then(function (ai) {
         var g = ai || rulesFor(day.country, day.city, intro);
         var base = rulesFor(day.country, day.city, intro);
         day.food = (g.food && g.food.length) ? g.food : base.food;
@@ -348,6 +389,7 @@
         day.auto = ai ? 'ai' : 'rule';
         return day;
       });
+    });
   }
 
   /* ================= 公共片段 ================= */
@@ -694,45 +736,48 @@
       + '<button class="btn btn-primary" id="genDone" hidden>查看我的行程指南</button>',
       function (root) {
         var log = $('#genLog', root), bar = $('#genBar', root), title = $('#genTitle', root);
-        var i = 0, total = todo.length;
+        var next = 0, done = 0, active = 0, total = todo.length;
         if (!netOK()) {
           var w = document.createElement('li');
           w.innerHTML = '<b>提示</b><span>当前离线，将使用内置模板生成攻略，联网后可在编辑中重新获取</span>';
           w.className = 'warn'; log.appendChild(w);
         }
-        function step() {
-          if (i >= total) {
-            title.textContent = '全部完成！共 ' + total + ' 个城市的资料已获取';
-            bar.style.width = '100%';
-            state.plan = p; state.admin = true;
-            ssset(LS_UNLOCK, '1');
-            savePlan(p);
-            $('#brandName').textContent = p.organizer.name ? (p.organizer.name + '的团') : '同行';
-            var btn = $('#genDone', root); btn.hidden = false;
-            btn.onclick = function () { closeSheet(); wz = null; render(); };
-            return;
-          }
-          var day = todo[i];
-          var li = document.createElement('li');
-          li.innerHTML = '<b>' + esc(day.city) + '</b><span>获取中…</span>';
-          log.appendChild(li);
-          autoFillDay(day, function (msg) { li.querySelector('span').textContent = msg; })
-            .then(function () {
-              li.querySelector('span').textContent = '✓ 天气坐标 · 景点简介 · 美食购物避坑';
-              li.className = 'ok';
-            })
-            .catch(function () {
-              li.querySelector('span').textContent = '△ 网络受限，已用基础模板';
-              li.className = 'warn';
-            })
-            .then(function () {
-              i++;
-              bar.style.width = Math.round(i / Math.max(total, 1) * 100) + '%';
-              title.textContent = '正在自动获取资料…（' + i + '/' + total + '）';
-              setTimeout(step, 30);
-            });
+        function finish() {
+          title.textContent = '全部完成！共 ' + total + ' 个城市的资料已获取';
+          bar.style.width = '100%';
+          state.plan = p; state.admin = true;
+          ssset(LS_UNLOCK, '1');
+          savePlan(p);
+          $('#brandName').textContent = p.organizer.name ? (p.organizer.name + '的团') : '同行';
+          var btn = $('#genDone', root); btn.hidden = false;
+          btn.onclick = function () { closeSheet(); wz = null; render(); };
         }
-        step();
+        /* 并发调度：同时最多跑 GEN_CONC 个城市，各自独立更新进度 */
+        function pump() {
+          while (active < GEN_CONC && next < total) {
+            var day = todo[next++], li = document.createElement('li');
+            li.innerHTML = '<b>' + esc(day.city) + '</b><span>排队…</span>';
+            log.appendChild(li);
+            active++;
+            autoFillDay(day, function (msg) { li.querySelector('span').textContent = msg; })
+              .then(function () {
+                li.querySelector('span').textContent = '✓ 天气坐标 · 景点简介 · 美食购物避坑';
+                li.className = 'ok';
+              })
+              .catch(function () {
+                li.querySelector('span').textContent = '△ 网络受限，已用基础模板';
+                li.className = 'warn';
+              })
+              .then(function () {
+                active--; done++;
+                bar.style.width = Math.round(done / Math.max(total, 1) * 100) + '%';
+                title.textContent = '正在自动获取资料…（' + done + '/' + total + '）';
+                pump();
+                if (done >= total) finish();
+              });
+          }
+        }
+        pump();
       });
   }
 
@@ -818,26 +863,30 @@
       + '<div class="gen-bar"><i id="genBar"></i></div><ul class="gen-log" id="genLog"></ul></div>'
       + '<button class="btn btn-primary" id="genDone" hidden>完成</button>', function (root) {
         var log = $('#genLog', root), bar = $('#genBar', root), title = $('#genTitle', root);
-        var todo = state.plan.days.filter(function (x) { return x.city; }), i = 0;
-        (function step() {
-          if (i >= todo.length) {
-            title.textContent = '已更新 ' + todo.length + ' 个城市的攻略';
-            savePlan(state.plan);
-            var b = $('#genDone', root); b.hidden = false;
-            b.onclick = function () { closeSheet(); render(); };
-            return;
+        var todo = state.plan.days.filter(function (x) { return x.city; });
+        var next = 0, done = 0, active = 0, total = todo.length;
+        function finish() {
+          title.textContent = '已更新 ' + total + ' 个城市的攻略';
+          savePlan(state.plan);
+          var b = $('#genDone', root); b.hidden = false;
+          b.onclick = function () { closeSheet(); render(); };
+        }
+        (function pump() {
+          while (active < GEN_CONC && next < total) {
+            var day = todo[next++], li = document.createElement('li');
+            li.innerHTML = '<b>' + esc(day.city) + '</b><span>获取中…</span>';
+            log.appendChild(li);
+            active++;
+            autoFillDay(day, function (m) { li.querySelector('span').textContent = m; })
+              .then(function () { li.querySelector('span').textContent = '✓ 已更新'; li.className = 'ok'; })
+              .catch(function () { li.querySelector('span').textContent = '△ 网络受限'; li.className = 'warn'; })
+              .then(function () {
+                active--; done++;
+                bar.style.width = Math.round(done / Math.max(total, 1) * 100) + '%';
+                pump();
+                if (done >= total) finish();
+              });
           }
-          var day = todo[i], li = document.createElement('li');
-          li.innerHTML = '<b>' + esc(day.city) + '</b><span>获取中…</span>';
-          log.appendChild(li);
-          autoFillDay(day, function (m) { li.querySelector('span').textContent = m; })
-            .then(function () { li.querySelector('span').textContent = '✓ 已更新'; li.className = 'ok'; })
-            .catch(function () { li.querySelector('span').textContent = '△ 网络受限'; li.className = 'warn'; })
-            .then(function () {
-              i++;
-              bar.style.width = Math.round(i / Math.max(todo.length, 1) * 100) + '%';
-              setTimeout(step, 30);
-            });
         })();
       });
   }
