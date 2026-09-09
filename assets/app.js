@@ -774,30 +774,9 @@
     needAdmin(function () {
       openSheet('组团人管理', ''
         + '<button class="btn btn-primary" id="mEdit" style="margin-bottom:10px">📝 编辑行程计划</button>'
-        + '<button class="btn btn-ghost" id="mPush" style="margin-bottom:10px">📣 推送随团人员</button>'
-        + '<button class="btn btn-ghost" id="mBase" style="margin-bottom:10px">🌐 设置分享入口地址</button>'
-        + '<button class="btn btn-ghost" id="mAI" style="margin-bottom:10px">🤖 AI 自动资料（可选）</button>'
-        + '<button class="btn btn-ghost" id="mPass" style="margin-bottom:10px">🔑 修改管理密码</button>'
-        + '<button class="btn btn-ghost" id="mRe" style="margin-bottom:10px">🔄 重新获取全部攻略</button>'
         + '<button class="btn btn-danger" id="mNew" style="margin-bottom:10px">🆕 清空并创建新行程</button>'
         + '<button class="btn btn-danger" id="mExit">退出组团人模式</button>', function (root) {
           $('#mEdit', root).onclick = function () { closeSheet(); openEditor(); };
-          $('#mPush', root).onclick = function () { closeSheet(); openPush(); };
-          $('#mBase', root).onclick = function () { closeSheet(); openShareBase(); };
-          $('#mAI', root).onclick = function () { closeSheet(); openAICfg(); };
-          $('#mPass', root).onclick = function () {
-            closeSheet();
-            openSheet('修改管理密码', '<div class="field"><label>新的管理密码（4–8 位）</label>'
-              + '<input class="inp" id="np" placeholder="例如 650101"></div>'
-              + '<button class="btn btn-primary" id="npOk">保存</button>', function (r2) {
-                $('#npOk', r2).onclick = function () {
-                  var v = $('#np', r2).value.trim();
-                  if (v.length < 4) { toast('密码至少 4 位'); return; }
-                  state.plan.passcode = v; savePlan(state.plan); closeSheet(); toast('密码已更新');
-                };
-              });
-          };
-          $('#mRe', root).onclick = function () { closeSheet(); refetchAll(); };
           $('#mNew', root).onclick = function () {
             if (!confirm('确定清空当前行程并重新创建？')) return;
             closeSheet(); state.plan = null; state.admin = false;
