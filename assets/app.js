@@ -570,9 +570,22 @@
 
   /* ================= 路由 ================= */
   function updateTopActions() {
-    // 随团人员视角（B-link）：隐藏「分享 / 设定行程」入口
     var el = document.querySelector('.topbar-right');
-    if (el) el.style.display = state.sharedView ? 'none' : '';
+    if (!el) return;
+    var sh = document.getElementById('btnShare'), ad = document.getElementById('btnAdmin');
+    var memberView = (state.sharedView || !!(state.plan && state.plan.lite)) && !state.admin;
+    if (!memberView) {
+      el.style.display = '';
+      if (sh) sh.style.display = '';
+      if (ad) ad.style.display = '';
+      return;
+    }
+    // 团员视角：默认隐藏全部团长入口；
+    // 若本机留有管理密码（团长误切换场景），保留 ⚙ 供密码登录找回，其余仍隐藏
+    var recoverable = !!(state.plan && state.plan.lite && state.plan.passcode);
+    el.style.display = recoverable ? '' : 'none';
+    if (sh) sh.style.display = 'none';
+    if (ad) ad.style.display = recoverable ? '' : 'none';
   }
   function render() {
     updateTopActions();
@@ -795,11 +808,11 @@
           if (!v) { $('#passErr', root).textContent = '请输入密码'; return; }
           if (!has) {
             state.plan.passcode = v; savePlan(state.plan);
-            state.admin = true; ssset(LS_UNLOCK, '1');
+            state.admin = true; ssset(LS_UNLOCK, '1'); updateTopActions();
             closeSheet(); toast('密码已设置'); onOk && onOk(); return;
           }
           if (v !== state.plan.passcode) { $('#passErr', root).textContent = '密码不正确'; return; }
-          state.admin = true; ssset(LS_UNLOCK, '1');
+          state.admin = true; ssset(LS_UNLOCK, '1'); updateTopActions();
           closeSheet(); toast('已进入组团人模式'); onOk && onOk();
         }
         $('#passOk', root).onclick = submit;
@@ -809,6 +822,8 @@
   }
   function needAdmin(then) {
     if (!state.plan) { openWizard(); return; }
+    // lite 行程 = 分享来的 B-link 行程：默认锁定团员视角；仅当本机留有管理密码（团长误切换场景）才允许登录
+    if (state.plan.lite && !state.plan.passcode) { toast('随团人员视角：仅可查看行程'); return; }
     if (state.admin) { then(); return; }
     if (ssget(LS_UNLOCK) === '1') { state.admin = true; then(); return; }
     askPasscode(then);
@@ -829,7 +844,7 @@
             render(); openWizard();
           };
           $('#mExit', root).onclick = function () {
-            state.admin = false; ssdel(LS_UNLOCK); closeSheet(); toast('已退出');
+            state.admin = false; ssdel(LS_UNLOCK); closeSheet(); updateTopActions(); toast('已退出');
           };
         });
     });
@@ -1456,6 +1471,9 @@
       + '<button class="btn btn-primary" id="swYes" style="margin-bottom:10px">切换到分享的行程</button>'
       + '<button class="btn btn-ghost" id="swNo">保留我自己的行程</button>', function (root) {
         $('#swYes', root).onclick = function () {
+          // 保留本地行程的管理密码与分享地址：团长误切换后仍可用密码找回管理权（仅存本机，不进链接）
+          if (local.passcode) shared.passcode = local.passcode;
+          if (local.shareBase) shared.shareBase = local.shareBase;
           state.plan = shared; savePlan(shared);
           state.sharedView = true;
           $('#topbarSub').textContent = shared.lite ? '随团人员视角 · 精简版' : '随团人员视角';
@@ -1472,6 +1490,8 @@
       var local = loadPlan();
       state.sharedView = false;
       if (shared && shared.days && shared.days.length) {
+        // 链接分享来的行程一律标记为团员版（lite），防止本机二次打开时升级为团长模式
+        shared.lite = true;
         if (local && local.days && local.days.length) {
           // 本机已有计划（例如团长自己点了分享链接）：先保留，再询问是否切换
           state.plan = local;
@@ -1483,6 +1503,11 @@
         }
       } else if (local && local.days && local.days.length) {
         state.plan = local;
+        // 本机保存的是分享来的行程（无 ?plan= 参数再次打开）：仍保持团员视角
+        if (local.lite) {
+          state.sharedView = true;
+          $('#topbarSub').textContent = '随团人员视角 · 精简版';
+        }
       } else {
         state.plan = null;
       }
