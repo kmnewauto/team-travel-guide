@@ -1477,13 +1477,18 @@
         makeShareCard(state.plan, liteURL).then(function (durl) {
           zone.innerHTML = '<img id="cardPrev" alt="行程分享卡片" style="width:100%;border-radius:16px;box-shadow:0 8px 22px rgba(20,60,70,.18)">';
           var im = $('#cardPrev', root);
-          // 用 Blob URL 展示：微信对真实图片(blob/http)长按识别比 dataURL 更稳
-          try { im.src = URL.createObjectURL(dataURLToBlob(durl)); }
-          catch (e) { im.src = durl; }
+          im.src = durl;  // dataURL 图片在微信长按「保存图片」最稳；长按识别同样可用
           im.onclick = function () { try { window.open(durl, '_blank'); } catch (e) { } };
           saveBtn.disabled = false;
           tip.innerHTML = '① 点「保存 / 分享卡片」把图存到<b>相册</b>，② 在微信聊天里<b>长按这张图片</b>即可识别<br>（网页里长按可能只出现「保存图片」，属正常，保存后在相册/聊天里长按识别最稳）';
+          var wxEnv = /MicroMessenger/i.test(navigator.userAgent || '');
           saveBtn.onclick = function () {
+            if (wxEnv) {
+              // 微信内置浏览器：Web Share 与 <a download> 均被拦截，长按图片「保存到相册」才是可靠路径
+              im.style.boxShadow = '0 0 0 4px #12808f, 0 8px 22px rgba(20,60,70,.18)';
+              toast('请长按上方卡片图片 → 选「保存到相册」→ 再到微信里发到群里');
+              return;
+            }
             saveBtn.disabled = true; saveBtn.textContent = '处理中…';
             var name = (state.plan.title || '行程').replace(/[\\/:*?"<>|]/g, '') + '-行程卡片.png';
             saveCardImage(durl, name).then(function (r) {
