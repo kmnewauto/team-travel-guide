@@ -1439,6 +1439,53 @@
     return Promise.resolve(downloadDataURL(durl, name) ? 'downloaded' : 'open');
   }
 
+  /* 生成自包含的团员只读分享页（无参数纯链接），用于部署到 team-travel-guide-B 仓库 */
+  function buildSnapshotHTML(plan) {
+    var o = JSON.parse(JSON.stringify(plan));
+    delete o.passcode;
+    o.lite = true;
+    var data = JSON.stringify(o).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+    var base = 'https://kmnewauto.github.io/team-travel-guide';
+    return '<!doctype html>\n'
+      + '<html lang="zh-CN"><head><meta charset="utf-8">\n'
+      + '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
+      + '<title>' + esc(o.title || '团队行程') + ' · 团员分享</title>\n'
+      + '<link rel="stylesheet" href="' + base + '/assets/styles.css">\n'
+      + '</head><body>\n'
+      + '<script>window.__PLAN__=' + data + ';window.__MEMBER__=true;<\/script>\n'
+      + '<script src="' + base + '/assets/qrcode.js"><\/script>\n'
+      + '<script src="' + base + '/assets/data.js"><\/script>\n'
+      + '<script src="' + base + '/assets/app.js"><\/script>\n'
+      + '</body></html>';
+  }
+
+  /* 通过 GitHub Contents API 把行程快照发布到 team-travel-guide-B 仓库，返回无参数纯链接 */
+  function generatePureLink(plan, token) {
+    return new Promise(function (resolve, reject) {
+      var o, html;
+      try {
+        o = JSON.parse(JSON.stringify(plan));
+        delete o.passcode; o.lite = true;
+        html = buildSnapshotHTML(o);
+      } catch (e) { return reject(e); }
+      var id = o.id || ('trip-' + Date.now());
+      var repo = 'kmnewauto/team-travel-guide-B';
+      var apiUrl = 'https://api.github.com/repos/' + repo + '/contents/' + encodeURIComponent(id) + '.html';
+      var headers = { 'Authorization': 'token ' + token, 'Content-Type': 'application/json', 'Accept': 'application/vnd.github+json' };
+      var bytes = new TextEncoder().encode(html), bin = '';
+      for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      var b64 = btoa(bin);
+      fetch(apiUrl, { headers: headers }).then(function (r) { return r.ok ? r.json() : null; }).then(function (existing) {
+        var body = { message: 'publish: ' + id, content: b64 };
+        if (existing && existing.sha) body.sha = existing.sha;
+        return fetch(apiUrl, { method: 'PUT', headers: headers, body: JSON.stringify(body) });
+      }).then(function (r) {
+        if (!r.ok) return r.json().then(function (j) { throw new Error(j.message || ('HTTP ' + r.status)); }, function () { throw new Error('HTTP ' + r.status); });
+        resolve('https://kmnewauto.github.io/team-travel-guide-B/' + id + '.html');
+      }).catch(reject);
+    });
+  }
+
   function openPush() {
     if (!state.plan || !state.plan.days.length) { toast('请先创建行程计划'); return; }
     var base = shareBase();
@@ -1455,6 +1502,12 @@
         + '<div style="margin:0 0 10px;padding:11px 12px;border:1.5px solid rgba(18,128,143,.45);border-radius:12px;background:rgba(18,128,143,.06)">'
         + '<div style="font-size:12.5px;color:var(--c-ink-2);line-height:1.6;margin-bottom:6px">① <b>复制链接（推荐）</b>：长按下面方框全选链接 → 复制 → 粘贴到微信群，团员点开即看</div>'
         + '<input id="linkBox" readonly value="' + liteURL.replace(/"/g, '%22') + '" style="width:100%;font-size:11.5px;padding:8px 10px;border:1px solid #cfe3e6;border-radius:8px;background:#fff;color:#14343b;box-sizing:border-box">'
+        + '</div>'
+        + '<div style="margin:0 0 10px;padding:11px 12px;border:1.5px solid rgba(18,128,143,.45);border-radius:12px;background:rgba(18,128,143,.06)">'
+        + '<div style="font-size:12.5px;color:var(--c-ink-2);line-height:1.6;margin-bottom:8px">③ <b>生成纯链接（无参数，最推荐）</b>：一键发布到专属分享站，得到 <code style="font-size:11px">…/team-travel-guide-B/&lt;id&gt;.html</code>，团员点开即用，不依赖截图</div>'
+        + '<button class="btn btn-primary" id="btnGenPure" style="width:100%">🌐 生成纯链接 B 链接</button>'
+        + '<div id="pureBox" style="display:none;margin-top:8px"><input id="pureLink" readonly value="" style="width:100%;font-size:11px;padding:8px 10px;border:1px solid #cfe3e6;border-radius:8px;background:#fff;color:#14343b;box-sizing:border-box"></div>'
+        + '<div id="tokBox" style="display:none;margin-top:8px"><input id="tokInput" placeholder="粘贴 GitHub Token（仅需 team-travel-guide-B 写权限）" style="width:100%;font-size:12px;padding:8px 10px;border:1px solid #cfe3e6;border-radius:8px;box-sizing:border-box"><button class="btn btn-ghost" id="tokSave" style="width:100%;margin-top:6px">保存 Token</button></div>'
         + '</div>'
         + '<div style="font-size:12.5px;color:var(--c-ink-2);line-height:1.6;margin:0 0 8px">② <b>行程卡片图片</b>（备选）：微信内长按图片可存相册，但<b>转发/发送给朋友常失败</b>，建议存相册后从聊天里发</div>'
         + '<div id="cardZone"><div class="empty" style="padding:22px 0"><div class="e-emoji">🖼️</div><div class="e-s" id="cardBusy">正在绘制分享卡片…</div></div></div>'
@@ -1491,6 +1544,37 @@
         var lb0 = $('#linkBox', root);
         if (lb0) lb0.addEventListener('click', function () { try { this.select(); } catch (e) { } });
         $('#btnCopyB', root).onclick = doCopy;
+        var genBtn = $('#btnGenPure', root), tokSave = $('#tokSave', root);
+        function onGenPure() {
+          var tok = localStorage.getItem('tgt.deployToken');
+          if (!tok) {
+            var tb = $('#tokBox', root); if (tb) tb.style.display = 'block';
+            var ti = $('#tokInput', root); if (ti) try { ti.focus(); } catch (e) { }
+            toast('请先粘贴 GitHub Token（仅需 team-travel-guide-B 写权限）');
+            return;
+          }
+          genBtn.disabled = true; var oldTxt = genBtn.textContent; genBtn.textContent = '生成中…';
+          generatePureLink(state.plan, tok).then(function (url) {
+            var pb = $('#pureBox', root), pl = $('#pureLink', root);
+            if (pl) pl.value = url; if (pb) pb.style.display = 'block';
+            toast('纯链接已生成，长按下方框复制发群');
+            genBtn.disabled = false; genBtn.textContent = '🌐 重新生成纯链接';
+          }).catch(function (e) {
+            genBtn.disabled = false; genBtn.textContent = oldTxt;
+            toast('生成失败：' + (e && e.message ? e.message : '请检查 Token / 网络'));
+          });
+        }
+        function onTokSave() {
+          var ti = $('#tokInput', root); if (!ti) return;
+          var v = (ti.value || '').trim();
+          if (!v) { toast('请粘贴 Token'); return; }
+          localStorage.setItem('tgt.deployToken', v);
+          var tb = $('#tokBox', root); if (tb) tb.style.display = 'none';
+          toast('Token 已保存，正在生成…');
+          onGenPure();
+        }
+        if (genBtn) genBtn.onclick = onGenPure;
+        if (tokSave) tokSave.onclick = onTokSave;
         var zone = $('#cardZone', root), saveBtn = $('#btnSaveCard', root), tip = $('#cardTip', root);
         makeShareCard(state.plan, liteURL).then(function (durl) {
           zone.innerHTML = '<img id="cardPrev" alt="行程分享卡片" style="width:100%;border-radius:16px;box-shadow:0 8px 22px rgba(20,60,70,.18)">';
@@ -1574,6 +1658,9 @@
     readSharedPlan().then(function (shared) {
       var local = loadPlan();
       state.sharedView = false;
+      // 快照页（team-travel-guide-B 分享页）注入的行程：直接进入团员只读，不走 URL 参数、不询问切换
+      var snapshot = (window.__PLAN__ && window.__PLAN__.days && window.__PLAN__.days.length) ? window.__PLAN__ : null;
+      if (snapshot) { shared = JSON.parse(JSON.stringify(snapshot)); delete shared.passcode; shared.lite = true; local = null; }
       if (shared && shared.days && shared.days.length) {
         // 链接分享来的行程一律标记为团员版（lite），防止本机二次打开时升级为团长模式
         shared.lite = true;
@@ -1611,4 +1698,5 @@
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
+  try { window.buildSnapshotHTML = buildSnapshotHTML; } catch (e) { }
 })();
