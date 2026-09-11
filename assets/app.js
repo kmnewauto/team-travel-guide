@@ -1325,7 +1325,7 @@
   }
   /* 绘制 720×1100 竖版行程分享卡片（含本地二维码），返回 PNG dataURL */
   function drawShareCard(plan, url, qrM) {
-    var W = 720, H = 1100, pad = 46, S = 3;   // S: 高清倍数，二维码与文字在 PNG 中更清晰
+    var W = 720, H = 1100, pad = 46, S = 2;   // S: 高清倍数(2x)。过大微信长按识别易失败，2x 已足够清晰
     var cv = document.createElement('canvas');
     cv.width = W * S; cv.height = H * S;
     var ctx = cv.getContext('2d');
@@ -1451,7 +1451,7 @@
       var warn = local
         ? '<div class="notice" style="margin-bottom:12px">⚠️ 当前地址 ' + esc(base) + ' 是本机/局域网地址，团员在外面打不开。<br>请改用公网版：https://kmnewauto.github.io/team-travel-guide/（登录后可重新生成）</div>' : '';
       var html = warn
-        + '<div class="hint" style="text-align:center;margin:2px 0 12px">把下面这张<b>行程卡片</b>发到群里：团员<b>长按识别</b>或微信<b>扫一扫</b>，点开即看完整攻略</div>'
+        + '<div class="hint" style="text-align:center;margin:2px 0 12px">把下面这张<b>行程卡片</b>发到群里：团员<b>微信扫一扫</b>或<b>在聊天里长按图片</b>识别，点开即看完整攻略</div>'
         + '<div id="cardZone"><div class="empty" style="padding:22px 0"><div class="e-emoji">🖼️</div><div class="e-s" id="cardBusy">正在绘制分享卡片…</div></div></div>'
         + '<div class="btn-row" style="margin-top:12px">'
         + '<button class="btn btn-primary" id="btnSaveCard" disabled style="flex:1.35">📤 保存 / 分享卡片</button>'
@@ -1477,10 +1477,12 @@
         makeShareCard(state.plan, liteURL).then(function (durl) {
           zone.innerHTML = '<img id="cardPrev" alt="行程分享卡片" style="width:100%;border-radius:16px;box-shadow:0 8px 22px rgba(20,60,70,.18)">';
           var im = $('#cardPrev', root);
-          im.src = durl;
+          // 用 Blob URL 展示：微信对真实图片(blob/http)长按识别比 dataURL 更稳
+          try { im.src = URL.createObjectURL(dataURLToBlob(durl)); }
+          catch (e) { im.src = durl; }
           im.onclick = function () { try { window.open(durl, '_blank'); } catch (e) { } };
           saveBtn.disabled = false;
-          tip.innerHTML = '手机上会自动弹出系统分享面板，选「微信」即可发送；<br>也可<b>长按上图保存</b>后发到群里';
+          tip.innerHTML = '① 点「保存 / 分享卡片」把图存到<b>相册</b>，② 在微信聊天里<b>长按这张图片</b>即可识别<br>（网页里长按可能只出现「保存图片」，属正常，保存后在相册/聊天里长按识别最稳）';
           saveBtn.onclick = function () {
             saveBtn.disabled = true; saveBtn.textContent = '处理中…';
             var name = (state.plan.title || '行程').replace(/[\\/:*?"<>|]/g, '') + '-行程卡片.png';
