@@ -1084,6 +1084,26 @@
       })
     };
   }
+  /* 仅编码行程骨架（城市/日期/酒店/景点/出发/组团人），剔除坐标与美食购物避坑。
+     团员端扫码后由 autoFillDay 复现完整攻略（这些本就是 App 自动生成，内容一致）。
+     链接大幅缩短 → 二维码版本更低、每模块更大 → 微信长按识别更稳 */
+  function encodeCard(p) {
+    var o = (p.organizer && p.organizer.name) ? p.organizer : { name: '', phone: '' };
+    return {
+      t: p.title || '', o: [o.name || '', o.phone || ''], s: p.startDate, e: p.endDate,
+      d: (p.days || []).map(function (d) {
+        return [
+          String(d.date || '').slice(5),            // MM-DD
+          d.city || '',
+          null, null,                                // 坐标：团员端 geocode 补全
+          d.depart || '',
+          (d.hotel && d.hotel.name) || '',
+          (d.spots || []).map(function (s) { return [s.name, s.time || '']; }),  // 去 emoji
+          [], [], []                                // 美食/购物/避坑：团员端 autoFill 生成
+        ];
+      })
+    };
+  }
   function compactDecode(c) {
     var year = String(c.s || '').slice(0, 4);
     function names(a) { return (a || []).map(function (x) { return { name: x, desc: '' }; }); }
@@ -1138,7 +1158,8 @@
   /* 生成二维码点阵（直接读 isDark，不依赖库的图片导出方法）；超长时降级纠错级别，仍失败返回 null */
   function qrMatrix(text) {
     if (typeof qrcode === 'undefined') return null;
-    var levels = ['M', 'L'];
+    // 展示型二维码（屏幕/图片识别，无物理磨损）：优先低纠错 L 以获得更低版本、更大模块
+    var levels = ['L', 'M'];
     for (var i = 0; i < levels.length; i++) {
       try {
         var qr = qrcode(0, levels[i]);
@@ -1155,15 +1176,16 @@
     }
     return null;
   }
-  /* 在卡片 Canvas 上逐格绘制二维码点阵 */
-  function drawQR(ctx, m, x, y, size) {
-    var n = m.length, cell = size / n;
+  /* 在卡片 Canvas 上逐格绘制二维码点阵（含 4 模块静默区，提升微信识别率） */
+  function drawQR(ctx, m, x, y, box) {
+    var n = m.length, quiet = 4, total = n + quiet * 2, cell = box / total;
+    var ox = x + quiet * cell, oy = y + quiet * cell;
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(x, y, size, size);
+    ctx.fillRect(x, y, box, box);
     ctx.fillStyle = '#14343b';
     for (var r = 0; r < n; r++) {
       for (var c = 0; c < n; c++) {
-        if (m[r][c]) ctx.fillRect(x + c * cell, y + r * cell, cell + 0.5, cell + 0.5);
+        if (m[r][c]) ctx.fillRect(ox + c * cell, oy + r * cell, Math.ceil(cell) + 0.6, Math.ceil(cell) + 0.6);
       }
     }
   }
@@ -1178,6 +1200,12 @@
     return deflateB64(json).then(function (z) {
       return z ? base + '?plan=z' + z : base + '?plan=' + encodeURIComponent(b64e(json));
     });
+  }
+  /* 卡片二维码 / 复制链接使用的「仅骨架」短链接：剔除坐标与美食购物避坑，降低二维码版本 */
+  function makeCardURL(p) {
+    var base = shareBase();
+    if (!base) return Promise.resolve('');
+    return deflateB64(JSON.stringify(encodeCard(p))).then(function (z) { return z ? base + '?plan=c' + z : ''; });
   }
   function buildShareText(p, url) {
     var loc = locate(p), cities = [];
@@ -1297,10 +1325,11 @@
   }
   /* 绘制 720×1100 竖版行程分享卡片（含本地二维码），返回 PNG dataURL */
   function drawShareCard(plan, url, qrM) {
-    var W = 720, H = 1100, pad = 46;
+    var W = 720, H = 1100, pad = 46, S = 3;   // S: 高清倍数，二维码与文字在 PNG 中更清晰
     var cv = document.createElement('canvas');
-    cv.width = W; cv.height = H;
+    cv.width = W * S; cv.height = H * S;
     var ctx = cv.getContext('2d');
+    ctx.scale(S, S);
     var o = plan.organizer || {}, title = (plan.title || '团队旅行').trim();
     var days = plan.days || [], cities = [];
     days.forEach(function (d) { if (d.city && cities[cities.length - 1] !== d.city) cities.push(d.city); });
@@ -1358,7 +1387,7 @@
     cardRound(ctx, 170, 702, 380, 352, 26);
     ctx.fill();
     if (qrM) {
-      drawQR(ctx, qrM, 210, 728, 300);
+      drawQR(ctx, qrM, 200, 718, 320);
     } else {
       ctx.fillStyle = '#0c5663';
       ctx.font = '500 22px ' + f;
@@ -1415,9 +1444,8 @@
     var base = shareBase();
     if (!base) { openShareBase(); return; }
     openSheet('分享给团员', '<div class="empty"><div class="e-emoji">⏳</div><div class="e-t">正在生成分享卡片…</div></div>');
-    shareURL(state.plan, true).then(function (liteURL) {
-      return liteURL || shareURL(state.plan, false);
-    }).then(function (liteURL) {
+    // 卡片二维码 / 复制链接均使用「仅骨架」短链接（encodeCard），确保二维码版本低、易识别
+    makeCardURL(state.plan).then(function (liteURL) {
       if (!liteURL) { toast('生成分享链接失败，请重试'); closeSheet(); return; }
       var local = isLocalBase(base);
       var warn = local
@@ -1489,13 +1517,33 @@
           state.plan = shared; savePlan(shared);
           state.sharedView = true;
           $('#topbarSub').textContent = shared.lite ? '随团人员视角 · 精简版' : '随团人员视角';
-          closeSheet(); render(); toast('已切换到分享的行程');
+          closeSheet(); render(); fillSharedPlan(); toast('已切换到分享的行程');
         };
         $('#swNo', root).onclick = function () { closeSheet(); };
       });
   }
 
   /* ================= 启动 ================= */
+  /* 团员端：扫码加载的是「仅骨架」分享链接，打开后自动复现完整攻略（坐标/简介/美食/避坑）。
+     这些资料本就是 App 自动生成，与团长端一致；补全后存本机，二次打开无需重算 */
+  function fillSharedPlan() {
+    if (!state.plan || !state.plan.lite) return;
+    var days = state.plan.days || [];
+    if (!days.length) return;
+    var need = days.some(function (d) {
+      return d.lat == null
+        || !(d.food && d.food.length)
+        || !(d.spots && d.spots[0] && d.spots[0].desc);
+    });
+    if (!need) return;
+    toast('正在为团员生成完整攻略…');
+    var pending = days.length, done = 0;
+    days.forEach(function (d) {
+      autoFillDay(d, function () {}).then(onOne, onOne);
+      function onOne() { if (++done === pending) { savePlan(state.plan); render(); } }
+    });
+  }
+
   function boot() {
     try { localStorage.removeItem('tgt.plan.v1'); localStorage.removeItem('tgt.plan.v2'); } catch (e) { }
     readSharedPlan().then(function (shared) {
@@ -1529,6 +1577,7 @@
       $('#brandName').textContent =
         (state.plan && state.plan.organizer && state.plan.organizer.name) ? (state.plan.organizer.name + '的团') : '同行';
       render();
+      fillSharedPlan();
       $$('.tab').forEach(function (t) { t.addEventListener('click', function () { go(t.dataset.route); }); });
       $('#btnAdmin').addEventListener('click', openAdmin);
       $('#btnShare').addEventListener('click', openPush);
