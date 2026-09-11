@@ -1135,19 +1135,37 @@
     if (location.protocol === 'file:') return '';
     return location.origin + location.pathname;
   }
-  /* 本地生成二维码（data:image/gif），不依赖任何外部服务 */
-  function qrDataURL(text, cell) {
-    try {
-      if (typeof qrcode === 'undefined') return null;
-      var qr = qrcode(0, 'M');
-      qr.addData(text, 'Byte');
-      qr.make();
-      var n = qr.getModuleCount();
-      var c = cell || Math.max(3, Math.min(8, Math.floor(560 / n)));
-      var tag = qr.createImgTag(c, 2);
-      var m = /src="([^"]+)"/.exec(tag);
-      return m ? m[1] : null;
-    } catch (e) { return null; }
+  /* 生成二维码点阵（直接读 isDark，不依赖库的图片导出方法）；超长时降级纠错级别，仍失败返回 null */
+  function qrMatrix(text) {
+    if (typeof qrcode === 'undefined') return null;
+    var levels = ['M', 'L'];
+    for (var i = 0; i < levels.length; i++) {
+      try {
+        var qr = qrcode(0, levels[i]);
+        qr.addData(text, 'Byte');
+        qr.make();
+        var n = qr.getModuleCount(), m = [];
+        for (var r = 0; r < n; r++) {
+          var row = [];
+          for (var c = 0; c < n; c++) row.push(qr.isDark(r, c));
+          m.push(row);
+        }
+        return m;
+      } catch (e) { }
+    }
+    return null;
+  }
+  /* 在卡片 Canvas 上逐格绘制二维码点阵 */
+  function drawQR(ctx, m, x, y, size) {
+    var n = m.length, cell = size / n;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(x, y, size, size);
+    ctx.fillStyle = '#14343b';
+    for (var r = 0; r < n; r++) {
+      for (var c = 0; c < n; c++) {
+        if (m[r][c]) ctx.fillRect(x + c * cell, y + r * cell, cell + 0.5, cell + 0.5);
+      }
+    }
   }
   function shareURL(p, lite) {
     var base = shareBase();
@@ -1278,7 +1296,7 @@
     return lines;
   }
   /* 绘制 720×1100 竖版行程分享卡片（含本地二维码），返回 PNG dataURL */
-  function drawShareCard(plan, url, qrImg) {
+  function drawShareCard(plan, url, qrM) {
     var W = 720, H = 1100, pad = 46;
     var cv = document.createElement('canvas');
     cv.width = W; cv.height = H;
@@ -1339,8 +1357,8 @@
     ctx.fillStyle = '#ffffff';
     cardRound(ctx, 170, 702, 380, 352, 26);
     ctx.fill();
-    if (qrImg) {
-      ctx.drawImage(qrImg, 210, 728, 300, 300);
+    if (qrM) {
+      drawQR(ctx, qrM, 210, 728, 300);
     } else {
       ctx.fillStyle = '#0c5663';
       ctx.font = '500 22px ' + f;
@@ -1354,15 +1372,9 @@
   }
   function makeShareCard(plan, url) {
     return new Promise(function (resolve, reject) {
-      var qr = qrDataURL(url);
-      if (!qr) {
-        try { resolve(drawShareCard(plan, url, null)); } catch (e) { reject(e); }
-        return;
-      }
-      var img = new Image();
-      img.onload = function () { try { resolve(drawShareCard(plan, url, img)); } catch (e) { reject(e); } };
-      img.onerror = function () { try { resolve(drawShareCard(plan, url, null)); } catch (e) { reject(e); } };
-      img.src = qr;
+      var m = null;
+      try { m = qrMatrix(url); } catch (e) { m = null; }
+      try { resolve(drawShareCard(plan, url, m)); } catch (e) { reject(e); }
     });
   }
   function dataURLToBlob(durl) {
