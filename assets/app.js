@@ -1451,27 +1451,45 @@
       var warn = local
         ? '<div class="notice" style="margin-bottom:12px">⚠️ 当前地址 ' + esc(base) + ' 是本机/局域网地址，团员在外面打不开。<br>请改用公网版：https://kmnewauto.github.io/team-travel-guide/（登录后可重新生成）</div>' : '';
       var html = warn
-        + '<div class="hint" style="text-align:center;margin:2px 0 12px">把下面这张<b>行程卡片</b>发到群里：团员<b>微信扫一扫</b>或<b>在聊天里长按图片</b>识别，点开即看完整攻略</div>'
+        + '<div class="hint" style="text-align:center;margin:2px 0 10px">发给团员：<b>微信里推荐「复制链接」</b>（最稳），图片卡片为备选</div>'
+        + '<div style="margin:0 0 10px;padding:11px 12px;border:1.5px solid rgba(18,128,143,.45);border-radius:12px;background:rgba(18,128,143,.06)">'
+        + '<div style="font-size:12.5px;color:var(--c-ink-2);line-height:1.6;margin-bottom:6px">① <b>复制链接（推荐）</b>：长按下面方框全选链接 → 复制 → 粘贴到微信群，团员点开即看</div>'
+        + '<input id="linkBox" readonly value="' + liteURL.replace(/"/g, '%22') + '" style="width:100%;font-size:11.5px;padding:8px 10px;border:1px solid #cfe3e6;border-radius:8px;background:#fff;color:#14343b;box-sizing:border-box">'
+        + '</div>'
+        + '<div style="font-size:12.5px;color:var(--c-ink-2);line-height:1.6;margin:0 0 8px">② <b>行程卡片图片</b>（备选）：微信内长按图片可存相册，但<b>转发/发送给朋友常失败</b>，建议存相册后从聊天里发</div>'
         + '<div id="cardZone"><div class="empty" style="padding:22px 0"><div class="e-emoji">🖼️</div><div class="e-s" id="cardBusy">正在绘制分享卡片…</div></div></div>'
         + '<div class="btn-row" style="margin-top:12px">'
-        + '<button class="btn btn-primary" id="btnSaveCard" disabled style="flex:1.35">📤 保存 / 分享卡片</button>'
-        + '<button class="btn btn-ghost" id="btnCopyB" style="flex:1">🔗 复制链接</button></div>'
+        + '<button class="btn btn-primary" id="btnCopyB" style="flex:1.35">🔗 复制链接</button>'
+        + '<button class="btn btn-ghost" id="btnSaveCard" disabled style="flex:1">📤 保存卡片</button></div>'
         + '<div class="hint" style="text-align:center;margin-top:10px" id="cardTip">卡片生成中，请稍候…</div>';
       openSheet('分享给团员', html, function (root) {
-        function doCopy() {
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(liteURL).then(function () { toast('链接已复制，可粘贴发送'); }, function () { toast('复制失败，请长按分享文案'); });
-            return;
-          }
+        function fallbackCopy() {
           var ok = false;
           try {
             var ta = document.createElement('textarea');
-            ta.value = liteURL; ta.style.position = 'fixed'; ta.style.opacity = '0';
-            document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, 99999);
+            ta.value = liteURL; ta.style.position = 'fixed'; ta.style.top = '0'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0, 99999);
             ok = document.execCommand('copy'); document.body.removeChild(ta);
           } catch (e) { }
-          toast(ok ? '链接已复制，可粘贴发送' : '复制失败，请长按文本复制');
+          return ok;
         }
+        function doCopy() {
+          var wxEnv = /MicroMessenger/i.test(navigator.userAgent || '');
+          if (wxEnv) {
+            // 微信 webview 禁止 JS 写入剪贴板：引导用户长按原生输入框复制（微信长按文本复制可靠）
+            var lb = $('#linkBox', root);
+            if (lb) { try { lb.focus(); lb.select(); } catch (e) { } }
+            toast('请长按上方链接框 → 选「复制」→ 粘贴到微信群');
+            return;
+          }
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(liteURL).then(function () { toast('链接已复制，可粘贴发送'); }, function () { toast(fallbackCopy() ? '链接已复制，可粘贴发送' : '复制失败，请长按链接框复制'); });
+            return;
+          }
+          toast(fallbackCopy() ? '链接已复制，可粘贴发送' : '复制失败，请长按链接框复制');
+        }
+        var lb0 = $('#linkBox', root);
+        if (lb0) lb0.addEventListener('click', function () { try { this.select(); } catch (e) { } });
         $('#btnCopyB', root).onclick = doCopy;
         var zone = $('#cardZone', root), saveBtn = $('#btnSaveCard', root), tip = $('#cardTip', root);
         makeShareCard(state.plan, liteURL).then(function (durl) {
@@ -1480,7 +1498,7 @@
           im.src = durl;  // dataURL 图片在微信长按「保存图片」最稳；长按识别同样可用
           im.onclick = function () { try { window.open(durl, '_blank'); } catch (e) { } };
           saveBtn.disabled = false;
-          tip.innerHTML = '① 点「保存 / 分享卡片」把图存到<b>相册</b>，② 在微信聊天里<b>长按这张图片</b>即可识别<br>（网页里长按可能只出现「保存图片」，属正常，保存后在相册/聊天里长按识别最稳）';
+          tip.innerHTML = '推荐：<b>复制上方链接</b>发到微信群（最稳）；图片卡片为备选——微信里长按图片可存相册，再从聊天里发更可靠';
           var wxEnv = /MicroMessenger/i.test(navigator.userAgent || '');
           saveBtn.onclick = function () {
             if (wxEnv) {
