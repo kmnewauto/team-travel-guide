@@ -19,6 +19,38 @@
   var state = { plan: null, route: 'home', admin: false, sharedView: false };
   var wz = null;                                  // 创建向导的临时状态
 
+  // 快照分享页（team-travel-guide-B/<id>.html）所需的最小 App 外壳。
+  // 快照 HTML 未内联此外壳（旧版 / 第三方打开）时，app.js 启动前自动补建，避免白屏。
+  var SNAPSHOT_SHELL = '<div class="app" id="app">'
+    + '<header class="topbar" id="topbar"><div class="topbar-bg"></div><div class="topbar-inner">'
+    + '<div class="topbar-left"><div class="brand"><span class="brand-dot"></span>'
+    + '<span class="brand-name" id="brandName">同行</span></div>'
+    + '<div class="topbar-sub" id="topbarSub">团队旅游指南</div></div>'
+    + '<div class="topbar-right">'
+    + '<button class="icon-btn" id="btnShare" title="推送随团人员" aria-label="推送随团人员"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg></button>'
+    + '<button class="icon-btn" id="btnAdmin" title="组团人设置" aria-label="组团人设置"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-2.87 1.2V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-2.92-1.16l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15H4a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 5.3 8.2l-.06-.06A2 2 0 1 1 8.07 5.3l.06.06A1.7 1.7 0 0 0 11 4.6V4a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 2.92 1.16l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 11H20a2 2 0 1 1 0 4h-.6z"/></svg></button>'
+    + '</div></div></header>'
+    + '<main class="views">'
+    + '<section class="view" id="view-home" hidden></section>'
+    + '<section class="view" id="view-today" hidden></section>'
+    + '<section class="view" id="view-trip" hidden></section>'
+    + '</main>'
+    + '<nav class="tabbar" id="tabbar">'
+    + '<button class="tab" data-route="home"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 9.8V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.8"/></svg><span>首页</span></button>'
+    + '<button class="tab" data-route="today"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="17" rx="3"/><path d="M8 2.5v4M16 2.5v4M3 9.5h18"/><path d="M9 14.5l2 2 4-4"/></svg><span>今天</span></button>'
+    + '<button class="tab" data-route="trip"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11z"/><circle cx="12" cy="10" r="2.6"/></svg><span>游程</span></button>'
+    + '</nav></div>'
+    + '<div class="sheet-root" id="sheetRoot" hidden><div class="sheet-mask" id="sheetMask"></div>'
+    + '<div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="sheet-handle"></div>'
+    + '<div class="sheet-head"><h3 id="sheetTitle">标题</h3><button class="sheet-close" id="sheetClose" aria-label="关闭">✕</button></div>'
+    + '<div class="sheet-body" id="sheetBody"></div></div></div>'
+    + '<div class="toast" id="toast" hidden></div>';
+
+  // 快照页外壳自愈：缺少 #app（旧版纯链接 B 页面）时补建，避免顶层 addEventListener 抛错导致白屏
+  if (window.__PLAN__ && document && !document.getElementById('app')) {
+    try { document.body.insertAdjacentHTML('afterbegin', SNAPSHOT_SHELL); } catch (e) { }
+  }
+
   /* ================= 工具 ================= */
   function $(s, r) { return (r || document).querySelector(s); }
   function $$(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
@@ -1452,6 +1484,7 @@
       + '<title>' + esc(o.title || '团队行程') + ' · 团员分享</title>\n'
       + '<link rel="stylesheet" href="' + base + '/assets/styles.css">\n'
       + '</head><body>\n'
+      + SNAPSHOT_SHELL + '\n'
       + '<script>window.__PLAN__=' + data + ';window.__MEMBER__=true;<\/script>\n'
       + '<script src="' + base + '/assets/qrcode.js"><\/script>\n'
       + '<script src="' + base + '/assets/data.js"><\/script>\n'
